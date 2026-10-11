@@ -1,10 +1,14 @@
 import {
   DEFAULT_MODEL,
   DEFAULT_BLOCKED_SITES,
+  DEFAULT_LOCAL_BASE_URL,
+  DEFAULT_PROVIDER,
   MODEL_CHOICES,
+  PROVIDER_CHOICES,
   STORAGE_KEYS as AGENT_KEYS,
   type HomepageModel,
   type KVStore,
+  type ProviderId,
 } from "@homepage/agent-core";
 
 /**
@@ -19,6 +23,9 @@ export const KEYS = {
   systemPrompt: "systemPrompt",
   blockedSites: "blockedSites",
   model: "model",
+  provider: "provider",
+  localBaseUrl: "localBaseUrl",
+  localModel: "localModel",
   autoRebuild: "autoRebuild",
   /** ISO timestamp of the last auto-build *attempted* (success or not). */
   lastAutoBuildAttempt: "lastAutoBuildAttempt",
@@ -39,6 +46,12 @@ export interface Settings {
   systemPrompt: string;
   blockedSites: string[];
   model: HomepageModel;
+  /** Which engine builds the homepage. */
+  provider: ProviderId;
+  /** OpenAI-compatible base URL of the local server, e.g. http://localhost:11434/v1. */
+  localBaseUrl: string;
+  /** Model name as the local server knows it; null until one is picked. */
+  localModel: string | null;
   /** Unset means on — auto-rebuild is opt-out. */
   autoRebuild: boolean;
   rebuildIntervalHours: number | null;
@@ -64,26 +77,40 @@ export async function loadSettings(): Promise<Settings> {
     KEYS.systemPrompt,
     KEYS.blockedSites,
     KEYS.model,
+    KEYS.provider,
+    KEYS.localBaseUrl,
+    KEYS.localModel,
     KEYS.autoRebuild,
     KEYS.rebuildIntervalHours,
   ]);
   const model = s[KEYS.model] as string | undefined;
+  const provider = s[KEYS.provider] as string | undefined;
   return {
     apiKey: (s[KEYS.apiKey] as string | undefined) ?? null,
     systemPrompt: (s[KEYS.systemPrompt] as string | undefined) ?? "",
     blockedSites: (s[KEYS.blockedSites] as string[] | undefined) ?? [...DEFAULT_BLOCKED_SITES],
     // Fall back if a stored model is no longer offered.
     model: MODEL_CHOICES.find((m) => m.id === model)?.id ?? DEFAULT_MODEL,
+    provider: PROVIDER_CHOICES.find((p) => p.id === provider)?.id ?? DEFAULT_PROVIDER,
+    localBaseUrl: (s[KEYS.localBaseUrl] as string | undefined) || DEFAULT_LOCAL_BASE_URL,
+    localModel: (s[KEYS.localModel] as string | undefined) || null,
     autoRebuild: s[KEYS.autoRebuild] !== false,
     rebuildIntervalHours: (s[KEYS.rebuildIntervalHours] as number | undefined) ?? null,
   };
 }
 
-export async function saveSetting<K extends "apiKey" | "systemPrompt" | "blockedSites" | "model" | "autoRebuild" | "rebuildIntervalHours">(
+export type SettingKey = keyof Settings;
+
+export async function saveSetting<K extends SettingKey>(
   key: K,
   value: Settings[K],
 ): Promise<void> {
   await browser.storage.local.set({ [KEYS[key]]: value });
+}
+
+/** Whether the chosen engine has what it needs to start a build. */
+export function isConfigured(settings: Pick<Settings, "provider" | "apiKey" | "localModel">): boolean {
+  return settings.provider === "local" ? Boolean(settings.localModel) : Boolean(settings.apiKey);
 }
 
 export async function loadHomepage(): Promise<Homepage | undefined> {

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { DEFAULT_MODEL, DEFAULT_BLOCKED_SITES, type HomepageModel } from "@homepage/agent-core";
+import {
+  DEFAULT_BLOCKED_SITES,
+  DEFAULT_LOCAL_BASE_URL,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  type HomepageModel,
+  type ProviderId,
+} from "@homepage/agent-core";
 import { DEFAULT_REBUILD_INTERVAL_HOURS } from "@/lib/auto-rebuild";
 import { BUILD_STEPS } from "@/lib/protocol";
 import { KEYS, extensionStore, loadHomepage, loadSettings, saveSetting } from "@/lib/storage";
@@ -17,6 +24,9 @@ export default function App() {
   const [systemPrompt, setSystemPrompt] = useState("");
   const [blockedSites, setBlockedSites] = useState<string[]>(DEFAULT_BLOCKED_SITES);
   const [model, setModel] = useState<HomepageModel>(DEFAULT_MODEL);
+  const [provider, setProvider] = useState<ProviderId>(DEFAULT_PROVIDER);
+  const [localBaseUrl, setLocalBaseUrl] = useState(DEFAULT_LOCAL_BASE_URL);
+  const [localModel, setLocalModel] = useState<string | null>(null);
   const [autoRebuild, setAutoRebuild] = useState(true);
   const [intervalHours, setIntervalHours] = useState(DEFAULT_REBUILD_INTERVAL_HOURS);
   /** Transpiled homepage, ready for Sandpack. */
@@ -50,6 +60,9 @@ export default function App() {
         setSystemPrompt(settings.systemPrompt);
         setBlockedSites(settings.blockedSites);
         setModel(settings.model);
+        setProvider(settings.provider);
+        setLocalBaseUrl(settings.localBaseUrl);
+        setLocalModel(settings.localModel);
         setAutoRebuild(settings.autoRebuild);
         setIntervalHours(settings.rebuildIntervalHours ?? DEFAULT_REBUILD_INTERVAL_HOURS);
         setResumable(activeSession ?? null);
@@ -82,6 +95,23 @@ export default function App() {
     setModel(next);
     await saveSetting("model", next);
   }, []);
+  const changeProvider = useCallback(async (next: ProviderId) => {
+    setProvider(next);
+    await saveSetting("provider", next);
+  }, []);
+  const changeLocalBaseUrl = useCallback(async (next: string) => {
+    setLocalBaseUrl(next);
+    await saveSetting("localBaseUrl", next);
+  }, []);
+  const changeLocalModel = useCallback(async (next: string | null) => {
+    setLocalModel(next);
+    await saveSetting("localModel", next);
+  }, []);
+  const useLocal = useCallback(async () => {
+    await changeProvider("local");
+    // Nothing to build with until a model is picked, so go straight to Settings.
+    setShowSettings(true);
+  }, [changeProvider]);
   const toggleAutoRebuild = useCallback(async (next: boolean) => {
     setAutoRebuild(next);
     await saveSetting("autoRebuild", next);
@@ -91,8 +121,30 @@ export default function App() {
     await saveSetting("rebuildIntervalHours", next);
   }, []);
 
+  const settingsModal = showSettings && (
+    <SettingsModal
+      initialPrompt={systemPrompt}
+      blockedSites={blockedSites}
+      model={model}
+      onChangeModel={changeModel}
+      provider={provider}
+      onChangeProvider={changeProvider}
+      hasApiKey={Boolean(apiKey)}
+      localBaseUrl={localBaseUrl}
+      onChangeLocalBaseUrl={changeLocalBaseUrl}
+      localModel={localModel}
+      onChangeLocalModel={changeLocalModel}
+      autoRebuild={autoRebuild}
+      onToggleAutoRebuild={toggleAutoRebuild}
+      intervalHours={intervalHours}
+      onChangeInterval={changeInterval}
+      onClose={() => setShowSettings(false)}
+      onSave={savePrompt}
+    />
+  );
+
   if (loading) return <div style={{ padding: 20, textAlign: "center" }}>Loading…</div>;
-  if (!apiKey) return <ApiKeySetup onSave={saveKey} />;
+  if (provider === "anthropic" && !apiKey) return <ApiKeySetup onSave={saveKey} onUseLocal={useLocal} />;
 
   // With no homepage to fall back to, a running build takes over the tab.
   if (state.running && (!renderedCode || viewProgress)) {
@@ -125,7 +177,14 @@ export default function App() {
               Resume interrupted build
             </button>
           )}
+          <button
+            style={{ ...btn, backgroundColor: "white", color: "#333", border: "1px solid #ddd" }}
+            onClick={() => setShowSettings(true)}
+          >
+            ⚙️ Settings
+          </button>
         </div>
+        {settingsModal}
       </div>
     );
   }
@@ -205,20 +264,7 @@ export default function App() {
 
       <HomepagePreview code={renderedCode} />
 
-      {showSettings && (
-        <SettingsModal
-          initialPrompt={systemPrompt}
-          blockedSites={blockedSites}
-          model={model}
-          onChangeModel={changeModel}
-          autoRebuild={autoRebuild}
-          onToggleAutoRebuild={toggleAutoRebuild}
-          intervalHours={intervalHours}
-          onChangeInterval={changeInterval}
-          onClose={() => setShowSettings(false)}
-          onSave={savePrompt}
-        />
-      )}
+      {settingsModal}
     </div>
   );
 }

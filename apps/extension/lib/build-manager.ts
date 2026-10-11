@@ -10,7 +10,7 @@ import {
   type BuildState,
   type PageMsg,
 } from "./protocol";
-import { KEYS, extensionStore, loadHomepage, loadSettings, saveHomepage } from "./storage";
+import { KEYS, extensionStore, isConfigured, loadHomepage, loadSettings, saveHomepage } from "./storage";
 
 type Port = Parameters<Parameters<typeof browser.runtime.onConnect.addListener>[0]>[0];
 
@@ -116,7 +116,7 @@ export class BuildManager {
     if (
       !shouldAutoRebuild({
         enabled: settings.autoRebuild,
-        hasApiKey: Boolean(settings.apiKey),
+        isConfigured: isConfigured(settings),
         isRunning: this.running,
         lastBuildTimestamp: homepage?.timestamp,
         lastAutoAttemptTimestamp: lastAttempt,
@@ -141,14 +141,23 @@ export class BuildManager {
       return; // single-flight: a second start just attaches.
     }
 
-    const { apiKey, systemPrompt, model } = await loadSettings();
-    if (!apiKey) {
-      // Manual builds are gated behind the key-setup screen and auto-builds
-      // require a key, so this only happens if the key was removed.
-      console.warn("[BuildManager] startBuild aborted — no API key in storage");
-      const message = "No Anthropic API key found. Add your key and try again.";
-      this.state = { ...INITIAL_BUILD_STATE, phase: "error", error: message };
-      this.broadcast({ kind: "error", message });
+    const settings = await loadSettings();
+    const { apiKey, systemPrompt, model, provider } = settings;
+    if (!isConfigured(settings)) {
+      // Manual builds are gated behind the setup screen and auto-builds require a
+      // configured engine, so this only happens if a setting was cleared.
+      console.warn("[BuildManager] startBuild aborted — engine not configured", { provider });
+      this.fail(
+        provider === "local"
+          ? "No local model selected. Pick one in Settings and try again."
+          : "No Anthropic API key found. Add your key and try again.",
+      );
+      return;
+    }
+    if (provider === "local") {
+      // The in-extension agent loop for local models doesn't exist yet; until it
+      // does, say so plainly rather than silently falling back to the API.
+      this.fail("Local-model builds aren't available yet. Switch the engine to Anthropic API in Settings to build now.");
       return;
     }
 
@@ -162,7 +171,7 @@ export class BuildManager {
     try {
       // The key is the user's own, read from local storage — there is no server
       // to hide it behind. See ARCHITECTURE.md → Privacy.
-      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      const client = new Anthropic({ apiKey: apiKey!, dangerouslyAllowBrowser: true });
 
       const resumeSessionId = opts.resume
         ? await extensionStore.get<string>(KEYS.activeSessionId)
@@ -207,6 +216,12 @@ export class BuildManager {
 
   cancel() {
     this.controller?.abort();
+  }
+
+  /** Report a build that couldn't start. */
+  private fail(message: string) {
+    this.state = { ...INITIAL_BUILD_STATE, phase: "error", error: message };
+    this.broadcast({ kind: "error", message });
   }
 
   // ---- callback fan-out ----------------------------------------------------
