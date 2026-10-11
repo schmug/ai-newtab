@@ -146,7 +146,13 @@ a blocked host is dropped: the browser still loads it, but nothing it read is
 sent. Loopback, private-IP and local-network hosts are always blocked, whatever
 the list says. Subresource loads are not intercepted.
 
-The session event log persists every domain, title and scraped page body server-side
+With the **local engine** (`runLocalHomepageBuild` in `local-orchestrator.ts`) none of
+the paragraph below applies: the agent loop runs in the service worker, pages are held
+in an in-memory map with read/grep/glob/write implemented over it, and the only
+requests are to the OpenAI-compatible server the user configured. Nothing is
+uploaded, and the map is cleared when the build ends.
+
+With the hosted engine, the session event log persists every domain, title and scraped page body server-side
 until deleted, and uploaded files persist independently. `runHomepageBuild` deletes
 both in a `finally`. Confirm retention/ZDR eligibility against current docs before
 distributing this.

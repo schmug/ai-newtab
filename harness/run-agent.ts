@@ -7,40 +7,54 @@
  * mounting, sandbox grep/read, the written deliverable, and cleanup.
  *
  * Run: pnpm agent:run
+ *
+ * With LOCAL_MODEL set, runs the local engine instead (no API key needed):
+ *   LOCAL_MODEL=qwen3:32b pnpm agent:run
+ * LOCAL_BASE_URL overrides the server (default: Ollama on localhost:11434).
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { runHomepageBuild } from "@homepage/agent-core";
+import { DEFAULT_LOCAL_BASE_URL, runHomepageBuild, runLocalHomepageBuild, type RunCallbacks } from "@homepage/agent-core";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { FileKVStore, OUT_DIR, OUT_PATH, STATE_PATH, nodeBridge } from "./node-bridge";
 
 async function main() {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set (put it in .env)");
-
-  const client = new Anthropic({ apiKey });
-  const store = new FileKVStore(STATE_PATH);
-
   mkdirSync(OUT_DIR, { recursive: true });
 
   const started = Date.now();
   let lastPhase = "";
-
-  const result = await runHomepageBuild({
-    client,
-    bridge: nodeBridge,
-    store,
-    userSystemPrompt: process.env.HOMEPAGE_PROMPT,
-    callbacks: {
-      onPhase: (phase, detail) => {
-        if (phase !== lastPhase) {
-          lastPhase = phase;
-          process.stdout.write(`\n\x1b[36m[${phase}]\x1b[0m${detail ? " " + detail : ""}\n`);
-        }
-      },
-      onText: (text) => process.stdout.write(text),
-      onLog: (line) => process.stdout.write(`\n\x1b[90m  · ${line}\x1b[0m\n`),
+  const callbacks: RunCallbacks = {
+    onPhase: (phase, detail) => {
+      if (phase !== lastPhase) {
+        lastPhase = phase;
+        process.stdout.write(`\n\x1b[36m[${phase}]\x1b[0m${detail ? " " + detail : ""}\n`);
+      }
     },
-  });
+    onText: (text) => process.stdout.write(text),
+    onLog: (line) => process.stdout.write(`\n\x1b[90m  · ${line}\x1b[0m\n`),
+  };
+
+  const localModel = process.env.LOCAL_MODEL;
+  let result;
+  if (localModel) {
+    result = await runLocalHomepageBuild({
+      baseUrl: process.env.LOCAL_BASE_URL || DEFAULT_LOCAL_BASE_URL,
+      model: localModel,
+      bridge: nodeBridge,
+      userSystemPrompt: process.env.HOMEPAGE_PROMPT,
+      callbacks,
+    });
+  } else {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set (put it in .env), or set LOCAL_MODEL to use a local model");
+
+    result = await runHomepageBuild({
+      client: new Anthropic({ apiKey }),
+      bridge: nodeBridge,
+      store: new FileKVStore(STATE_PATH),
+      userSystemPrompt: process.env.HOMEPAGE_PROMPT,
+      callbacks,
+    });
+  }
 
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
   writeFileSync(OUT_PATH, result.code);

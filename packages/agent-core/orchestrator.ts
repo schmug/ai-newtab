@@ -12,6 +12,7 @@ import type {
   KVStore,
   PageRef,
   RunCallbacks,
+  ScrapedPage,
   RunPhase,
 } from "./types";
 
@@ -19,7 +20,7 @@ type SessionEvent = Anthropic.Beta.Sessions.BetaManagedAgentsSessionEvent;
 type CustomToolUse = Anthropic.Beta.Sessions.BetaManagedAgentsAgentCustomToolUseEvent;
 
 /** Callbacks with the optionality resolved, so call sites don't repeat `?.`. */
-interface Emit {
+export interface Emit {
   phase(phase: RunPhase, detail?: string): void;
   text(chunk: string): void;
   log(line: string): void;
@@ -100,7 +101,7 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
       let result: GetHistoryResult | GetPageHtmlResult;
       switch (event.name) {
         case "getHistory":
-          result = await runGetHistory(event, bridge, emit, blockedSites);
+          result = await runGetHistory(event.input as GetHistoryInput, bridge, emit, blockedSites);
           break;
         case "getPageHtml":
           result = await runGetPageHtml(event, { client, bridge, sessionId: sessionId!, rememberUpload, emit, blockedSites });
@@ -261,13 +262,23 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
 // tool implementations
 // ---------------------------------------------------------------------------
 
-async function runGetHistory(
-  event: CustomToolUse,
+export interface GetHistoryInput {
+  daysToAnalyze?: number;
+  maxResults?: number;
+}
+
+export interface GetPageHtmlInput {
+  urls: string[];
+  loadDelayMs?: number;
+}
+
+/** Shared by both engines: read history through the bridge and digest what isn't blocked. */
+export async function runGetHistory(
+  input: GetHistoryInput,
   bridge: BrowserBridge,
   emit: Emit,
   blockedSites: string[],
 ): Promise<GetHistoryResult> {
-  const input = event.input as { daysToAnalyze?: number; maxResults?: number };
   const daysToAnalyze = input.daysToAnalyze ?? DEFAULTS.daysToAnalyze;
   const maxResults = input.maxResults ?? DEFAULTS.maxResults;
 
@@ -284,6 +295,45 @@ async function runGetHistory(
   return digest;
 }
 
+/**
+ * Shared by both engines: load the allowed URLs in the browser and drop anything
+ * blocked, including pages that redirected onto a blocked host. What happens to
+ * the HTML afterwards (upload vs. in-memory) is up to the engine.
+ */
+export async function scrapeAllowedPages(
+  input: GetPageHtmlInput,
+  bridge: BrowserBridge,
+  emit: Emit,
+  blockedSites: string[],
+): Promise<{ pages: ScrapedPage[]; blocked: GetPageHtmlResult["failed"]; failed: GetPageHtmlResult["failed"] }> {
+  emit.phase("scraping", `${input.urls.length} pages`);
+
+  const allowed: string[] = [];
+  const blocked: GetPageHtmlResult["failed"] = [];
+  for (const url of input.urls) {
+    // Match on the URL the browser will load; malformed URLs never reach the signed-in browser.
+    if (isAllowedUrl(url, blockedSites)) allowed.push(url);
+    else blocked.push({ url, reason: "blocked by the user's settings" });
+  }
+
+  // Skip the bridge entirely when nothing is left, so no scraper window opens.
+  const { pages: loaded, failed } = allowed.length
+    ? await bridge.getPageHtml({
+        urls: allowed,
+        loadDelayMs: input.loadDelayMs ?? DEFAULTS.loadDelayMs,
+      })
+    : { pages: [], failed: [] };
+
+  // A redirect can land on a blocked host; drop what it read before anything is uploaded.
+  const pages = loaded.filter((page) => {
+    if (!page.finalUrl || isAllowedUrl(page.finalUrl, blockedSites)) return true;
+    blocked.push({ url: page.url, reason: "blocked by the user's settings" });
+    return false;
+  });
+  if (blocked.length) emit.log(`blocked: ${blocked.length} url(s)`);
+  return { pages, blocked, failed };
+}
+
 async function runGetPageHtml(
   event: CustomToolUse,
   ctx: {
@@ -295,32 +345,12 @@ async function runGetPageHtml(
     blockedSites: string[];
   },
 ): Promise<GetPageHtmlResult> {
-  const input = event.input as { urls: string[]; loadDelayMs?: number };
-  ctx.emit.phase("scraping", `${input.urls.length} pages`);
-
-  const allowed: string[] = [];
-  const blocked: GetPageHtmlResult["failed"] = [];
-  for (const url of input.urls) {
-    // Match on the URL the browser will load; malformed URLs never reach the signed-in browser.
-    if (isAllowedUrl(url, ctx.blockedSites)) allowed.push(url);
-    else blocked.push({ url, reason: "blocked by the user's settings" });
-  }
-
-  // Skip the bridge entirely when nothing is left, so no scraper window opens.
-  const { pages: loaded, failed } = allowed.length
-    ? await ctx.bridge.getPageHtml({
-        urls: allowed,
-        loadDelayMs: input.loadDelayMs ?? DEFAULTS.loadDelayMs,
-      })
-    : { pages: [], failed: [] };
-
-  // A redirect can land on a blocked host; drop what it read before anything is uploaded.
-  const pages = loaded.filter((page) => {
-    if (!page.finalUrl || isAllowedUrl(page.finalUrl, ctx.blockedSites)) return true;
-    blocked.push({ url: page.url, reason: "blocked by the user's settings" });
-    return false;
-  });
-  if (blocked.length) ctx.emit.log(`blocked: ${blocked.length} url(s)`);
+  const { pages, blocked, failed } = await scrapeAllowedPages(
+    event.input as unknown as GetPageHtmlInput,
+    ctx.bridge,
+    ctx.emit,
+    ctx.blockedSites,
+  );
 
   const refs: PageRef[] = [];
   const mountFailures = [...blocked, ...failed];
@@ -370,10 +400,10 @@ async function runGetPageHtml(
 // deliverable retrieval
 // ---------------------------------------------------------------------------
 
-const CODE_FENCE = /```(?:tsx|jsx|ts|js|typescript|javascript)?\s*\n([\s\S]*?)```/;
+export const CODE_FENCE = /```(?:tsx|jsx|ts|js|typescript|javascript)?\s*\n([\s\S]*?)```/;
 
 /** Strip a ```tsx fence, if the model wrapped the file contents in one. */
-function stripFence(text: string): string {
+export function stripFence(text: string): string {
   const fenced = text.match(CODE_FENCE);
   return (fenced ? fenced[1] : text).trim();
 }
