@@ -17,7 +17,8 @@ export function rebuildIntervalMs(hours?: number | null): number {
 
 export interface AutoRebuildInput {
   enabled: boolean;
-  hasApiKey: boolean;
+  /** The chosen engine is set up (an API key, or a local model picked). */
+  isConfigured: boolean;
   isRunning: boolean;
   /** ISO timestamp of the last successful build, if any. */
   lastBuildTimestamp?: string | null;
@@ -35,10 +36,10 @@ export interface AutoRebuildInput {
  *   has passed, so it can't loop. The user can always rebuild by hand.
  */
 export function shouldAutoRebuild(input: AutoRebuildInput): boolean {
-  const { enabled, hasApiKey, isRunning, lastBuildTimestamp, lastAutoAttemptTimestamp, intervalMs, now } =
+  const { enabled, isConfigured, isRunning, lastBuildTimestamp, lastAutoAttemptTimestamp, intervalMs, now } =
     input;
 
-  if (!enabled || !hasApiKey || isRunning || !lastBuildTimestamp) return false;
+  if (!enabled || !isConfigured || isRunning || !lastBuildTimestamp) return false;
 
   const age = (iso: string) => now.getTime() - new Date(iso).getTime();
   if (age(lastBuildTimestamp) < intervalMs) return false;

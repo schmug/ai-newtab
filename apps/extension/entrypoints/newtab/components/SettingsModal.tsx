@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { MODEL_CHOICES, normalizeBlockList, type HomepageModel } from "@homepage/agent-core";
+import {
+  DEFAULT_LOCAL_BASE_URL,
+  MODEL_CHOICES,
+  PROVIDER_CHOICES,
+  listLocalModels,
+  normalizeBaseUrl,
+  normalizeBlockList,
+  type HomepageModel,
+  type ProviderId,
+} from "@homepage/agent-core";
 import { REBUILD_INTERVAL_CHOICES } from "@/lib/auto-rebuild";
 import { btn } from "./ui";
 
@@ -8,6 +17,13 @@ export function SettingsModal({
   blockedSites,
   model,
   onChangeModel,
+  provider,
+  onChangeProvider,
+  hasApiKey,
+  localBaseUrl,
+  onChangeLocalBaseUrl,
+  localModel,
+  onChangeLocalModel,
   autoRebuild,
   onToggleAutoRebuild,
   intervalHours,
@@ -19,6 +35,14 @@ export function SettingsModal({
   blockedSites: string[];
   model: HomepageModel;
   onChangeModel: (next: HomepageModel) => void;
+  provider: ProviderId;
+  onChangeProvider: (next: ProviderId) => void;
+  /** Switching back to the API without a key lands on the key-setup screen. */
+  hasApiKey: boolean;
+  localBaseUrl: string;
+  onChangeLocalBaseUrl: (next: string) => void;
+  localModel: string | null;
+  onChangeLocalModel: (next: string | null) => void;
   autoRebuild: boolean;
   onToggleAutoRebuild: (next: boolean) => void;
   intervalHours: number;
@@ -28,6 +52,34 @@ export function SettingsModal({
 }) {
   const [draft, setDraft] = useState(initialPrompt);
   const [blockedDraft, setBlockedDraft] = useState(blockedSites.join("\n"));
+  const [urlDraft, setUrlDraft] = useState(localBaseUrl);
+  const [localModels, setLocalModels] = useState<string[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+
+  const commitUrl = () => {
+    const next = normalizeBaseUrl(urlDraft) || DEFAULT_LOCAL_BASE_URL;
+    setUrlDraft(next);
+    if (next !== localBaseUrl) onChangeLocalBaseUrl(next);
+  };
+
+  const checkConnection = async () => {
+    commitUrl();
+    setChecking(true);
+    setCheckError(null);
+    try {
+      const models = await listLocalModels(normalizeBaseUrl(urlDraft) || DEFAULT_LOCAL_BASE_URL);
+      setLocalModels(models);
+      if (models.length === 0) setCheckError("Connected, but the server has no models. Pull or load one first.");
+      // Pick the first model if none is chosen yet, so a build can start right away.
+      else if (!localModel || !models.includes(localModel)) onChangeLocalModel(models[0]);
+    } catch (err) {
+      setLocalModels(null);
+      setCheckError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChecking(false);
+    }
+  };
 
   return (
     <div
@@ -71,22 +123,83 @@ export function SettingsModal({
         <p id="blocked-sites-help" style={{ color: "#888", fontSize: 12, margin: "6px 0 0" }}>
           One per line. Subdomains are included. Use *.example.com for wildcards.
         </p>
-        <label
-          style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, color: "#333", fontSize: 14 }}
-        >
-          Model
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, color: "#333", fontSize: 14 }}>
+          Engine
           <select
-            value={model}
-            onChange={(e) => onChangeModel(e.target.value as HomepageModel)}
-            style={{ padding: "4px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" }}
+            value={provider}
+            onChange={(e) => onChangeProvider(e.target.value as ProviderId)}
+            style={select}
           >
-            {MODEL_CHOICES.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
+            {PROVIDER_CHOICES.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
               </option>
             ))}
           </select>
         </label>
+        {provider === "anthropic" ? (
+          <>
+            <label style={{ ...indented, marginTop: 10 }}>
+              Model
+              <select value={model} onChange={(e) => onChangeModel(e.target.value as HomepageModel)} style={select}>
+                {MODEL_CHOICES.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {!hasApiKey && (
+              <p style={help}>You&apos;ll be asked for your Anthropic API key when you close Settings.</p>
+            )}
+          </>
+        ) : (
+          <>
+            <label style={{ ...indented, marginTop: 10 }}>
+              Server
+              <input
+                value={urlDraft}
+                onChange={(e) => setUrlDraft(e.target.value)}
+                onBlur={commitUrl}
+                placeholder={DEFAULT_LOCAL_BASE_URL}
+                spellCheck={false}
+                style={{ ...select, flex: 1, fontFamily: "ui-monospace, monospace" }}
+              />
+              <button
+                onClick={checkConnection}
+                disabled={checking}
+                style={{ ...btn, padding: "4px 10px", fontSize: 13, opacity: checking ? 0.6 : 1 }}
+              >
+                {checking ? "Checking…" : "Check connection"}
+              </button>
+            </label>
+            <label style={{ ...indented, marginTop: 10 }}>
+              Model
+              {localModels && localModels.length > 0 ? (
+                <select value={localModel ?? ""} onChange={(e) => onChangeLocalModel(e.target.value)} style={select}>
+                  {localModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={localModel ?? ""}
+                  onChange={(e) => onChangeLocalModel(e.target.value.trim() || null)}
+                  placeholder="Check connection to list models"
+                  spellCheck={false}
+                  style={{ ...select, flex: 1, fontFamily: "ui-monospace, monospace" }}
+                />
+              )}
+            </label>
+            {checkError && <p style={{ ...help, color: "#a02620" }}>{checkError}</p>}
+            <p style={help}>
+              Any OpenAI-compatible server works: Ollama (default above) or LM Studio
+              (http://localhost:1234/v1). Your history and pages stay on this machine.
+            </p>
+          </>
+        )}
         <label
           style={{
             display: "flex",
@@ -132,7 +245,7 @@ export function SettingsModal({
         </label>
         <p style={{ color: "#888", fontSize: 12, margin: "6px 0 0" }}>
           When on, the extension rebuilds in the background once your homepage is this old, so
-          your next tab shows a fresh one (uses your API key).
+          your next tab shows a fresh one.
         </p>
         <div style={{ display: "flex", gap: 12, marginTop: 20, justifyContent: "flex-end" }}>
           <button
@@ -149,3 +262,7 @@ export function SettingsModal({
     </div>
   );
 }
+
+const select = { padding: "4px 8px", fontSize: 14, borderRadius: 4, border: "1px solid #ddd" } as const;
+const indented = { display: "flex", alignItems: "center", gap: 8, marginLeft: 24, color: "#333", fontSize: 14 } as const;
+const help = { color: "#888", fontSize: 12, margin: "6px 0 0 24px" } as const;

@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { btn } from "./ui";
 
-export function ApiKeySetup({ onSave }: { onSave: (key: string) => void }) {
+export function ApiKeySetup({
+  onSave,
+  onUseLocal,
+}: {
+  onSave: (key: string) => void;
+  /** Skip the key and build with a model running on this machine instead. */
+  onUseLocal: () => void;
+}) {
   const [value, setValue] = useState("");
   const valid = value.trim().startsWith("sk-ant-");
 
@@ -34,6 +41,16 @@ export function ApiKeySetup({ onSave }: { onSave: (key: string) => void }) {
       >
         Save key
       </button>
+      <p style={{ color: "#555", lineHeight: 1.6, marginTop: 32 }}>
+        Rather keep everything on this machine?{" "}
+        <button
+          onClick={onUseLocal}
+          style={{ background: "none", border: "none", padding: 0, color: "#06c", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
+        >
+          Use a local model instead
+        </button>{" "}
+        (Ollama, LM Studio, or any OpenAI-compatible server).
+      </p>
     </div>
   );
 }
