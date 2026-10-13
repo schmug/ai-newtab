@@ -144,7 +144,7 @@ export class BuildManager {
     }
 
     const settings = await loadSettings();
-    const { apiKey, systemPrompt, model, provider, localBaseUrl, localModel } = settings;
+    const { apiKey, systemPrompt, model, provider, localBaseUrl, localModel, localApiKey } = settings;
     if (!isConfigured(settings)) {
       // Manual builds are gated behind the setup screen and auto-builds require a
       // configured engine, so this only happens if a setting was cleared.
@@ -179,6 +179,7 @@ export class BuildManager {
         result = await runLocalHomepageBuild({
           baseUrl: localBaseUrl,
           model: localModel!,
+          apiKey: localApiKey,
           bridge: browserBridge,
           userSystemPrompt: systemPrompt,
           blockedSites,

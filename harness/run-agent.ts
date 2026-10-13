@@ -39,6 +39,7 @@ async function main() {
     result = await runLocalHomepageBuild({
       baseUrl: process.env.LOCAL_BASE_URL || DEFAULT_LOCAL_BASE_URL,
       model: localModel,
+      apiKey: process.env.LOCAL_API_KEY,
       bridge: nodeBridge,
       userSystemPrompt: process.env.HOMEPAGE_PROMPT,
       callbacks,

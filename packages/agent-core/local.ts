@@ -21,15 +21,28 @@ export function normalizeBaseUrl(url: string): string {
 }
 
 /**
+ * Headers for a local server. Most need no key, but some (Unsloth Studio, a
+ * proxied vLLM) require one. Unsloth's keyless mode still rejects requests that
+ * carry a browser Origin, and Chrome attaches one to the extension's chat POSTs.
+ */
+export function localHeaders(apiKey?: string | null): Record<string, string> {
+  const key = apiKey?.trim();
+  return key ? { authorization: `Bearer ${key}` } : {};
+}
+
+/**
  * The models a local server offers, via the OpenAI-compatible `GET /models`.
  * Throws with a readable message when the server is down or answers oddly, so
  * Settings can show it as-is.
  */
-export async function listLocalModels(baseUrl: string, signal?: AbortSignal): Promise<string[]> {
+export async function listLocalModels(
+  baseUrl: string,
+  opts: { apiKey?: string | null; signal?: AbortSignal } = {},
+): Promise<string[]> {
   const url = `${normalizeBaseUrl(baseUrl)}/models`;
   let response: Response;
   try {
-    response = await fetch(url, { signal });
+    response = await fetch(url, { headers: localHeaders(opts.apiKey), signal: opts.signal });
   } catch {
     throw new Error(`Couldn't reach ${url}. Is the server running?`);
   }

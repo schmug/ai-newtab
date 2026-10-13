@@ -12,7 +12,7 @@
  * lost, and the next manual or scheduled build starts over.
  */
 import { slugifyUrl } from "./history-digest";
-import { normalizeBaseUrl } from "./local";
+import { localHeaders, normalizeBaseUrl } from "./local";
 import {
   CODE_FENCE,
   runGetHistory,
@@ -65,6 +65,8 @@ export interface LocalRunOptions {
   baseUrl: string;
   /** Model name as the server knows it. */
   model: string;
+  /** Sent as a bearer token when set; most local servers need none. */
+  apiKey?: string | null;
   bridge: BrowserBridge;
   userSystemPrompt?: string;
   /** Re-read before every tool call, as in the hosted engine. */
@@ -299,7 +301,7 @@ async function chatCompletion(
   try {
     response = await doFetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...localHeaders(opts.apiKey) },
       body: JSON.stringify({ model: opts.model, messages, tools: TOOLS, tool_choice: "auto", stream: true }),
       signal,
     });

@@ -19,9 +19,11 @@ type Turn = { content?: string; calls?: { name: string; args?: unknown; raw?: st
  */
 function fakeServer(turns: Turn[]) {
   const requests: any[] = [];
+  const headers: Headers[] = [];
   const fetchImpl = (async (url: string, init: RequestInit) => {
     expect(url).toBe("http://localhost:11434/v1/chat/completions");
     requests.push(JSON.parse(String(init.body)));
+    headers.push(new Headers(init.headers));
     const turn = turns.shift();
     if (!turn) throw new Error("model called more times than scripted");
     const toolCalls = (turn.calls ?? []).map((c, i) => ({
@@ -45,7 +47,7 @@ function fakeServer(turns: Turn[]) {
     const body = chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") + "data: [DONE]\n\n";
     return new Response(body, { headers: { "content-type": "text/event-stream" } });
   }) as unknown as typeof fetch;
-  return { fetchImpl, requests };
+  return { fetchImpl, requests, headers };
 }
 
 const PAGE_HTML =
@@ -115,6 +117,19 @@ describe("runLocalHomepageBuild", () => {
       const answered = req.messages.filter((m: any) => m.role === "tool").map((m: any) => m.tool_call_id);
       expect(answered).toEqual(asked);
     }
+  });
+
+  test("sends the API key as a bearer token on every request, and none without one", async () => {
+    const keyed = fakeServer([
+      { calls: [{ name: "write", args: { path: OUTPUT_PATH, content: COMPONENT } }] },
+      { content: "Done." },
+    ]);
+    await runLocalHomepageBuild({ baseUrl: "http://localhost:11434/v1", model: "m", apiKey: "sk-unsloth-abc", bridge: bridge([]), fetch: keyed.fetchImpl });
+    expect(keyed.headers.map((h) => h.get("authorization"))).toEqual(["Bearer sk-unsloth-abc", "Bearer sk-unsloth-abc"]);
+
+    const keyless = fakeServer([{ calls: [{ name: "write", args: { path: OUTPUT_PATH, content: COMPONENT } }] }, { content: "Done." }]);
+    await runLocalHomepageBuild({ baseUrl: "http://localhost:11434/v1", model: "m", bridge: bridge([]), fetch: keyless.fetchImpl });
+    expect(keyless.headers.every((h) => !h.has("authorization"))).toBe(true);
   });
 
   test("hands bad tool arguments back to the model instead of failing", async () => {
