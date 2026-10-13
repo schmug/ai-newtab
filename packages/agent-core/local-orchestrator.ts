@@ -41,10 +41,22 @@ const MAX_STEPS = 60;
 const MAX_NUDGES = 2;
 /** `read` returns at most this many lines, and at most this many characters. */
 const READ_MAX_LINES = 200;
-const READ_MAX_CHARS = 20_000;
+/** Small enough that a 9K-token window holds a read plus the prompt; HTML runs ~3 chars a token. */
+const READ_MAX_CHARS = 8_000;
 /** `grep` returns at most this many matches, each line cut to this length. */
 const GREP_MAX_MATCHES = 60;
 const GREP_LINE_CHARS = 300;
+
+/** Context window assumed when the server doesn't report one (Ollama, LM Studio). */
+const DEFAULT_CONTEXT_TOKENS = 32_768;
+/** Held back from the window for the reply; the component itself runs a few thousand tokens. */
+const MAX_REPLY_RESERVE = 8_192;
+/** Rough chars per token. Low on purpose: HTML tokenizes densely, and overshooting the window fails the build. */
+const CHARS_PER_TOKEN = 3;
+/** History domains per call. The hosted default (30) costs several thousand tokens that never get trimmed. */
+const HISTORY_MAX_RESULTS = 15;
+/** Tools whose output can be fetched again, so it is what gets trimmed when the window is full. */
+const REFETCHABLE = new Set(["read", "grep", "glob"]);
 
 /** Appended to the shared prompt: what differs when the tools are local. */
 const LOCAL_ADDENDUM = `
@@ -67,6 +79,8 @@ export interface LocalRunOptions {
   model: string;
   /** Sent as a bearer token when set; most local servers need none. */
   apiKey?: string | null;
+  /** The model's context window. Default: what the server's /models reports, else 32K. */
+  contextTokens?: number;
   bridge: BrowserBridge;
   userSystemPrompt?: string;
   /** Re-read before every tool call, as in the hosted engine. */
@@ -146,6 +160,9 @@ export async function runLocalHomepageBuild(opts: LocalRunOptions): Promise<Home
 
   emit.phase("setup");
   emit.log(`local model ${opts.model} at ${normalizeBaseUrl(opts.baseUrl)}`);
+  const contextTokens = opts.contextTokens ?? (await reportedContext(opts, signal)) ?? DEFAULT_CONTEXT_TOKENS;
+  const promptBudget = contextTokens - Math.min(MAX_REPLY_RESERVE, Math.floor(contextTokens * 0.4));
+  emit.log(`context window ${contextTokens} tokens`);
 
   const messages: ChatMessage[] = [
     { role: "system", content: HOMEPAGE_SYSTEM_PROMPT + LOCAL_ADDENDUM },
@@ -161,7 +178,13 @@ export async function runLocalHomepageBuild(opts: LocalRunOptions): Promise<Home
     );
 
   const tools: Record<string, (args: any) => Promise<unknown>> = {
-    getHistory: async (args: GetHistoryInput) => runGetHistory(args, bridge, emit, await blockedSites()),
+    getHistory: async (args: GetHistoryInput) =>
+      runGetHistory(
+        { ...args, maxResults: Math.min(args.maxResults ?? HISTORY_MAX_RESULTS, HISTORY_MAX_RESULTS) },
+        bridge,
+        emit,
+        await blockedSites(),
+      ),
     getPageHtml: async (args: GetPageHtmlInput) => mountPages(args, bridge, emit, await blockedSites(), files),
     read: async (args) => readFile(files, args),
     grep: async (args) => grepFiles(files, args),
@@ -184,6 +207,9 @@ export async function runLocalHomepageBuild(opts: LocalRunOptions): Promise<Home
     for (let step = 0; step < MAX_STEPS; step++) {
       if (signal?.aborted) throw new Error("aborted");
       emit.phase("thinking");
+
+      const trimmed = compactMessages(messages, promptBudget);
+      if (trimmed) emit.log(`trimmed ${trimmed} earlier tool result(s) to fit the context window`);
 
       const reply = await chatCompletion(opts, messages, emit, signal);
       messages.push({
@@ -234,6 +260,56 @@ export async function runLocalHomepageBuild(opts: LocalRunOptions): Promise<Home
     // Pages only ever lived in memory; drop them with the build.
     emit.phase("cleanup");
     files.clear();
+  }
+}
+
+/**
+ * Keeps the conversation under `budgetTokens` (estimated) by replacing the
+ * oldest read/grep/glob results with a note, in place. The system prompt, the
+ * kickoff, history and page lists, and the latest round of tool results are
+ * never touched. Returns how many results were replaced; the conversation can
+ * still be over budget if nothing else is trimmable.
+ */
+export function compactMessages(messages: ChatMessage[], budgetTokens: number): number {
+  const estimate = () => messages.reduce((n, m) => n + JSON.stringify(m).length, 0) / CHARS_PER_TOKEN;
+  if (estimate() <= budgetTokens) return 0;
+
+  const calls = new Map<string, ToolCall>();
+  let lastAssistant = -1;
+  messages.forEach((m, i) => {
+    if (m.role !== "assistant") return;
+    lastAssistant = i;
+    for (const c of m.tool_calls ?? []) calls.set(c.id, c);
+  });
+
+  let trimmed = 0;
+  for (let i = 0; i < lastAssistant && estimate() > budgetTokens; i++) {
+    const m = messages[i];
+    if (m.role !== "tool") continue;
+    const call = calls.get(m.tool_call_id);
+    if (!call || !REFETCHABLE.has(call.function.name) || m.content.startsWith("[Output removed")) continue;
+    messages[i] = {
+      ...m,
+      content: `[Output removed to fit the context window: ${call.function.name} ${call.function.arguments.slice(0, 200)}. Call it again if you still need it.]`,
+    };
+    trimmed++;
+  }
+  return trimmed;
+}
+
+/** The model's context window from `/models`, as Unsloth Studio and llama.cpp report it; undefined if not given. */
+async function reportedContext(opts: LocalRunOptions, signal?: AbortSignal): Promise<number | undefined> {
+  try {
+    const response = await (opts.fetch ?? fetch)(`${normalizeBaseUrl(opts.baseUrl)}/models`, {
+      headers: localHeaders(opts.apiKey),
+      signal,
+    });
+    if (!response.ok) return undefined;
+    const body = (await response.json()) as { data?: { id?: unknown; context_length?: unknown }[] };
+    const size = body.data?.find((m) => m.id === opts.model)?.context_length;
+    return typeof size === "number" && size > 0 ? size : undefined;
+  } catch {
+    return undefined;
   }
 }
 

@@ -4,6 +4,7 @@ import {
   globFiles,
   grepFiles,
   readFile,
+  compactMessages,
   runLocalHomepageBuild,
   splitHtmlLines,
   type BrowserBridge,
@@ -17,10 +18,12 @@ type Turn = { content?: string; calls?: { name: string; args?: unknown; raw?: st
  * streams it back as SSE, splitting tool arguments across chunks the way real
  * servers do. Requests are recorded so tests can inspect what the model was sent.
  */
-function fakeServer(turns: Turn[]) {
+function fakeServer(turns: Turn[], models: object[] = []) {
   const requests: any[] = [];
   const headers: Headers[] = [];
   const fetchImpl = (async (url: string, init: RequestInit) => {
+    // The build asks once for the model's context window.
+    if (url === "http://localhost:11434/v1/models") return Response.json({ object: "list", data: models });
     expect(url).toBe("http://localhost:11434/v1/chat/completions");
     requests.push(JSON.parse(String(init.body)));
     headers.push(new Headers(init.headers));
@@ -176,6 +179,90 @@ describe("runLocalHomepageBuild", () => {
     await expect(
       runLocalHomepageBuild({ baseUrl: "http://localhost:11434/v1", model: "m", bridge: bridge([]), fetch: missing }),
     ).rejects.toThrow('Local model server answered 404: {"error":"model \\"m\\" not found"}');
+  });
+});
+
+describe("context budget", () => {
+  const big = "x".repeat(9_000);
+  const round = (id: string, name: string, args: object, content: string) => [
+    { role: "assistant", content: null, tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }] },
+    { role: "tool", tool_call_id: id, content },
+  ];
+  const conversation = () => [
+    { role: "system", content: "sys" },
+    { role: "user", content: "kickoff" },
+    ...round("h", "getHistory", {}, '{"sites":[]}'),
+    ...round("r1", "read", { path: "a.html" }, big),
+    ...round("g1", "grep", { pattern: "Story" }, big),
+    ...round("r2", "read", { path: "b.html" }, big),
+  ] as any[];
+
+  test("leaves a conversation that fits alone", () => {
+    const messages = conversation();
+    expect(compactMessages(messages, 100_000)).toBe(0);
+    expect(messages).toEqual(conversation());
+  });
+
+  test("trims the oldest page reads first and keeps the latest round, history and prompt", () => {
+    const messages = conversation();
+    // ~3 chars a token: 27k chars of tool output is ~9k tokens; 6k leaves room for one.
+    expect(compactMessages(messages, 6_000)).toBe(2);
+    const tool = (id: string) => messages.find((m) => m.tool_call_id === id).content;
+    expect(tool("r1")).toContain('removed to fit the context window: read {"path":"a.html"}');
+    expect(tool("g1")).toContain("removed to fit the context window: grep");
+    expect(tool("r2")).toBe(big);
+    expect(tool("h")).toBe('{"sites":[]}');
+    expect(messages.slice(0, 2)).toEqual(conversation().slice(0, 2));
+  });
+
+  test("asks the browser for at most 15 history domains", async () => {
+    const asked: number[] = [];
+    const historyBridge: BrowserBridge = {
+      getHistory: async ({ maxResults }) => (asked.push(maxResults), { sites: [], totalSitesSeen: 0 }),
+      getPageHtml: async () => ({ pages: [], failed: [] }),
+    };
+    const { fetchImpl } = fakeServer([
+      { calls: [{ name: "getHistory", args: {} }, { name: "getHistory", args: { maxResults: 50 } }, { name: "getHistory", args: { maxResults: 5 } }] },
+      { calls: [{ name: "write", args: { path: OUTPUT_PATH, content: COMPONENT } }] },
+      { content: "Done." },
+    ]);
+    await runLocalHomepageBuild({ baseUrl: "http://localhost:11434/v1", model: "m", bridge: historyBridge, fetch: fetchImpl });
+    expect(asked).toEqual([15, 15, 5]);
+  });
+
+  test("a build trims earlier reads to the window the server reports", async () => {
+    const page = Array.from({ length: 400 }, (_, i) => `<p>line ${i} ${"y".repeat(60)}</p>`).join("");
+    const pageBridge: BrowserBridge = {
+      getHistory: async () => ({ sites: [], totalSitesSeen: 0 }),
+      getPageHtml: async ({ urls }) => ({ pages: urls.map((url) => ({ url, title: "t", html: page })), failed: [] }),
+    };
+    const { fetchImpl, requests } = fakeServer(
+      [
+        { calls: [{ name: "getPageHtml", args: { urls: ["https://a.example/"] } }] },
+        { calls: [{ name: "read", args: { path: "a_example_0.html" } }] },
+        { calls: [{ name: "read", args: { path: "a_example_0.html", offset: 100 } }] },
+        { calls: [{ name: "read", args: { path: "a_example_0.html", offset: 200 } }] },
+        { calls: [{ name: "write", args: { path: OUTPUT_PATH, content: COMPONENT } }] },
+        { content: "Done." },
+      ],
+      [{ id: "other", context_length: 999_999 }, { id: "m", context_length: 9216 }],
+    );
+    const logs: string[] = [];
+    const result = await runLocalHomepageBuild({
+      baseUrl: "http://localhost:11434/v1", model: "m", bridge: pageBridge, fetch: fetchImpl,
+      callbacks: { onLog: (l) => logs.push(l) },
+    });
+    expect(result.code).toBe(COMPONENT);
+    expect(logs).toContain("context window 9216 tokens");
+
+    // Each read is capped at 8,000 characters.
+    const reads = requests[2].messages.filter((m: any) => m.role === "tool").slice(1);
+    expect(reads[0].content.length).toBeLessThanOrEqual(8_200);
+    // By the last request the oldest read is a stub and the newest is whole.
+    const last = requests.at(-1).messages.filter((m: any) => m.role === "tool").map((m: any) => m.content);
+    expect(last[1]).toContain("removed to fit the context window");
+    expect(last[3]).toContain("line 2");
+    for (const req of requests) expect(JSON.stringify(req.messages).length / 3).toBeLessThan(9216);
   });
 });
 
