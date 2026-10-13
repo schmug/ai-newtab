@@ -1,6 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { HOMEPAGE_SYSTEM_PROMPT } from "./prompt";
-import { GET_HISTORY_SCHEMA, GET_PAGE_HTML_SCHEMA } from "./schemas";
+import {
+  GET_HISTORY_DESCRIPTION,
+  GET_HISTORY_SCHEMA,
+  GET_PAGE_HTML_DESCRIPTION,
+  GET_PAGE_HTML_SCHEMA,
+} from "./schemas";
 import type { KVStore } from "./types";
 
 /** Models offered in Settings. The first is the default. */
@@ -100,21 +105,13 @@ function agentDefinition(model: HomepageModel) {
       {
         type: "custom",
         name: "getHistory",
-        description:
-          "Returns a ranked digest of the user's most-visited domains over a recent " +
-          "window: visit counts, unique page counts, last-visit timestamps, relevance " +
-          "scores, and a few sample page titles per domain. Call this first, once.",
+        description: GET_HISTORY_DESCRIPTION,
         input_schema: GET_HISTORY_SCHEMA,
       },
       {
         type: "custom",
         name: "getPageHtml",
-        description:
-          "Loads URLs in the user's real, logged-in browser, sanitizes the HTML, and " +
-          "mounts each page into your sandbox. Returns a mountPath and byte count per " +
-          "page plus a list of failures. Use grep/read on the returned mountPath. " +
-          "Prefer this over any web fetch: it sees authenticated, JavaScript-rendered " +
-          "pages that an anonymous fetch cannot.",
+        description: GET_PAGE_HTML_DESCRIPTION,
         input_schema: GET_PAGE_HTML_SCHEMA,
       },
     ],

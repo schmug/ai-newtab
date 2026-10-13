@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { runHomepageBuild, type RunPhase } from "@homepage/agent-core";
+import { runHomepageBuild, runLocalHomepageBuild, type HomepageBuildResult, type RunPhase } from "@homepage/agent-core";
 import { rebuildIntervalMs, shouldAutoRebuild } from "./auto-rebuild";
 import { browserBridge } from "./browser-bridge";
 import {
@@ -95,8 +95,10 @@ export class BuildManager {
       return;
     }
 
+    // Only the hosted engine has sessions to reattach to. A session left over from
+    // before a switch to the local engine must not trigger a local build every tick.
     const sessionId = await extensionStore.get<string>(KEYS.activeSessionId);
-    if (sessionId) {
+    if (sessionId && (await loadSettings()).provider === "anthropic") {
       void this.startBuild({ resume: true });
       return;
     }
@@ -142,7 +144,7 @@ export class BuildManager {
     }
 
     const settings = await loadSettings();
-    const { apiKey, systemPrompt, model, provider } = settings;
+    const { apiKey, systemPrompt, model, provider, localBaseUrl, localModel } = settings;
     if (!isConfigured(settings)) {
       // Manual builds are gated behind the setup screen and auto-builds require a
       // configured engine, so this only happens if a setting was cleared.
@@ -154,12 +156,6 @@ export class BuildManager {
       );
       return;
     }
-    if (provider === "local") {
-      // The in-extension agent loop for local models doesn't exist yet; until it
-      // does, say so plainly rather than silently falling back to the API.
-      this.fail("Local-model builds aren't available yet. Switch the engine to Anthropic API in Settings to build now.");
-      return;
-    }
 
     this.running = true;
     this.controller = new AbortController();
@@ -169,29 +165,47 @@ export class BuildManager {
     console.log("[BuildManager] build started", { resume: Boolean(opts.resume) });
 
     try {
-      // The key is the user's own, read from local storage — there is no server
-      // to hide it behind. See ARCHITECTURE.md → Privacy.
-      const client = new Anthropic({ apiKey: apiKey!, dangerouslyAllowBrowser: true });
+      const callbacks = {
+        onPhase: (phase: RunPhase, detail?: string) => this.onPhase(phase, detail),
+        onText: (chunk: string) => this.onText(chunk),
+        onLog: (line: string) => this.onLog(line),
+      };
+      const blockedSites = async () => (await loadSettings()).blockedSites;
 
-      const resumeSessionId = opts.resume
-        ? await extensionStore.get<string>(KEYS.activeSessionId)
-        : undefined;
+      let result: HomepageBuildResult;
+      if (provider === "local") {
+        // Everything stays on this machine: the loop runs here and talks to the
+        // local server. There is no session to resume, so `resume` doesn't apply.
+        result = await runLocalHomepageBuild({
+          baseUrl: localBaseUrl,
+          model: localModel!,
+          bridge: browserBridge,
+          userSystemPrompt: systemPrompt,
+          blockedSites,
+          signal: this.controller.signal,
+          callbacks,
+        });
+      } else {
+        // The key is the user's own, read from local storage — there is no server
+        // to hide it behind. See ARCHITECTURE.md → Privacy.
+        const client = new Anthropic({ apiKey: apiKey!, dangerouslyAllowBrowser: true });
 
-      const result = await runHomepageBuild({
-        client,
-        bridge: browserBridge,
-        store: extensionStore,
-        userSystemPrompt: systemPrompt,
-        blockedSites: async () => (await loadSettings()).blockedSites,
-        model,
-        resumeSessionId,
-        signal: this.controller.signal,
-        callbacks: {
-          onPhase: (phase, detail) => this.onPhase(phase, detail),
-          onText: (chunk) => this.onText(chunk),
-          onLog: (line) => this.onLog(line),
-        },
-      });
+        const resumeSessionId = opts.resume
+          ? await extensionStore.get<string>(KEYS.activeSessionId)
+          : undefined;
+
+        result = await runHomepageBuild({
+          client,
+          bridge: browserBridge,
+          store: extensionStore,
+          userSystemPrompt: systemPrompt,
+          blockedSites,
+          model,
+          resumeSessionId,
+          signal: this.controller.signal,
+          callbacks,
+        });
+      }
 
       // Persist the raw TSX; the page transpiles it for preview.
       await saveHomepage(result.code);

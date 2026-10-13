@@ -14,6 +14,19 @@ export interface ToolInputSchema {
   [k: string]: unknown;
 }
 
+/** Tool descriptions, shared by the hosted agent and the local engine. */
+export const GET_HISTORY_DESCRIPTION =
+  "Returns a ranked digest of the user's most-visited domains over a recent " +
+  "window: visit counts, unique page counts, last-visit timestamps, relevance " +
+  "scores, and a few sample page titles per domain. Call this first, once.";
+
+export const GET_PAGE_HTML_DESCRIPTION =
+  "Loads URLs in the user's real, logged-in browser, sanitizes the HTML, and " +
+  "mounts each page into your sandbox. Returns a mountPath and byte count per " +
+  "page plus a list of failures. Use grep/read on the returned mountPath. " +
+  "Prefer this over any web fetch: it sees authenticated, JavaScript-rendered " +
+  "pages that an anonymous fetch cannot.";
+
 export const GET_HISTORY_SCHEMA: ToolInputSchema = {
   type: "object",
   properties: {

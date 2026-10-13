@@ -90,6 +90,23 @@ addresses (localhost, private IPs, `.local` and `.internal` hosts) are always bl
 
 The new model takes effect from your next build.
 
+**Engine.** Switch from **Anthropic API** to **Local model** to build with a model
+running on your own machine instead. Your history and the pages the agent reads
+never leave it, and no API key is needed. Any OpenAI-compatible server works:
+
+1. Start one, for example [Ollama](https://ollama.com) with a model that supports
+   tool calling (`ollama pull qwen3:32b`). Give it a large context window, since
+   the defaults are too small for scraped pages:
+   `OLLAMA_CONTEXT_LENGTH=32768 ollama serve`. For LM Studio, start its local
+   server and set the context length when you load the model.
+2. In Settings, choose **Local model**, keep or change the server address
+   (`http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM
+   Studio), click **Check connection**, and pick a model.
+
+Local builds are slower and the result depends heavily on the model; larger
+models follow the homepage rules more reliably. A local build can't be resumed
+if Chrome closes partway through; the next build starts over.
+
 **Rebuild automatically.** On by default. Once your homepage is older than the
 interval you pick (6, 12, 24 or 48 hours), the extension rebuilds it quietly in the
 background. It only starts after you've built once by hand, and it won't retry a
