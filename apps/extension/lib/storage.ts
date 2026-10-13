@@ -26,6 +26,7 @@ export const KEYS = {
   provider: "provider",
   localBaseUrl: "localBaseUrl",
   localModel: "localModel",
+  localApiKey: "localApiKey",
   autoRebuild: "autoRebuild",
   /** ISO timestamp of the last auto-build *attempted* (success or not). */
   lastAutoBuildAttempt: "lastAutoBuildAttempt",
@@ -52,6 +53,8 @@ export interface Settings {
   localBaseUrl: string;
   /** Model name as the local server knows it; null until one is picked. */
   localModel: string | null;
+  /** Bearer token for the local server; null when it needs none. */
+  localApiKey: string | null;
   /** Unset means on — auto-rebuild is opt-out. */
   autoRebuild: boolean;
   rebuildIntervalHours: number | null;
@@ -80,6 +83,7 @@ export async function loadSettings(): Promise<Settings> {
     KEYS.provider,
     KEYS.localBaseUrl,
     KEYS.localModel,
+    KEYS.localApiKey,
     KEYS.autoRebuild,
     KEYS.rebuildIntervalHours,
   ]);
@@ -94,6 +98,7 @@ export async function loadSettings(): Promise<Settings> {
     provider: PROVIDER_CHOICES.find((p) => p.id === provider)?.id ?? DEFAULT_PROVIDER,
     localBaseUrl: (s[KEYS.localBaseUrl] as string | undefined) || DEFAULT_LOCAL_BASE_URL,
     localModel: (s[KEYS.localModel] as string | undefined) || null,
+    localApiKey: (s[KEYS.localApiKey] as string | undefined) || null,
     autoRebuild: s[KEYS.autoRebuild] !== false,
     rebuildIntervalHours: (s[KEYS.rebuildIntervalHours] as number | undefined) ?? null,
   };

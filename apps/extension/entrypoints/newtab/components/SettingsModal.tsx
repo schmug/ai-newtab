@@ -24,6 +24,8 @@ export function SettingsModal({
   onChangeLocalBaseUrl,
   localModel,
   onChangeLocalModel,
+  localApiKey,
+  onChangeLocalApiKey,
   autoRebuild,
   onToggleAutoRebuild,
   intervalHours,
@@ -43,6 +45,8 @@ export function SettingsModal({
   onChangeLocalBaseUrl: (next: string) => void;
   localModel: string | null;
   onChangeLocalModel: (next: string | null) => void;
+  localApiKey: string | null;
+  onChangeLocalApiKey: (next: string | null) => void;
   autoRebuild: boolean;
   onToggleAutoRebuild: (next: boolean) => void;
   intervalHours: number;
@@ -53,6 +57,7 @@ export function SettingsModal({
   const [draft, setDraft] = useState(initialPrompt);
   const [blockedDraft, setBlockedDraft] = useState(blockedSites.join("\n"));
   const [urlDraft, setUrlDraft] = useState(localBaseUrl);
+  const [keyDraft, setKeyDraft] = useState(localApiKey ?? "");
   const [localModels, setLocalModels] = useState<string[] | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
@@ -63,12 +68,21 @@ export function SettingsModal({
     if (next !== localBaseUrl) onChangeLocalBaseUrl(next);
   };
 
+  const commitKey = () => {
+    const next = keyDraft.trim() || null;
+    setKeyDraft(next ?? "");
+    if (next !== localApiKey) onChangeLocalApiKey(next);
+  };
+
   const checkConnection = async () => {
     commitUrl();
+    commitKey();
     setChecking(true);
     setCheckError(null);
     try {
-      const models = await listLocalModels(normalizeBaseUrl(urlDraft) || DEFAULT_LOCAL_BASE_URL);
+      const models = await listLocalModels(normalizeBaseUrl(urlDraft) || DEFAULT_LOCAL_BASE_URL, {
+        apiKey: keyDraft,
+      });
       setLocalModels(models);
       if (models.length === 0) setCheckError("Connected, but the server has no models. Pull or load one first.");
       // Pick the first model if none is chosen yet, so a build can start right away.
@@ -174,6 +188,19 @@ export function SettingsModal({
               </button>
             </label>
             <label style={{ ...indented, marginTop: 10 }}>
+              API key
+              <input
+                type="password"
+                value={keyDraft}
+                onChange={(e) => setKeyDraft(e.target.value)}
+                onBlur={commitKey}
+                placeholder="Optional"
+                autoComplete="off"
+                spellCheck={false}
+                style={{ ...select, flex: 1, fontFamily: "ui-monospace, monospace" }}
+              />
+            </label>
+            <label style={{ ...indented, marginTop: 10 }}>
               Model
               {localModels && localModels.length > 0 ? (
                 <select value={localModel ?? ""} onChange={(e) => onChangeLocalModel(e.target.value)} style={select}>
@@ -196,7 +223,8 @@ export function SettingsModal({
             {checkError && <p style={{ ...help, color: "#a02620" }}>{checkError}</p>}
             <p style={help}>
               Any OpenAI-compatible server works: Ollama (default above) or LM Studio
-              (http://localhost:1234/v1). Your history and pages stay on this machine.
+              (http://localhost:1234/v1). Leave the API key empty unless the server
+              requires one, as Unsloth Studio does. Your history and pages stay on this machine.
             </p>
           </>
         )}

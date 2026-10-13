@@ -6,8 +6,8 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-function mockFetch(impl: (url: string) => Promise<Response>) {
-  globalThis.fetch = ((input: string | URL | Request) => impl(String(input))) as typeof fetch;
+function mockFetch(impl: (url: string, init?: RequestInit) => Promise<Response>) {
+  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => impl(String(input), init)) as typeof fetch;
 }
 
 describe("normalizeBaseUrl", () => {
@@ -25,6 +25,26 @@ describe("listLocalModels", () => {
     });
     expect(await listLocalModels("http://localhost:11434/v1/")).toEqual(["llama3.3:70b", "qwen3:32b"]);
     expect(requested).toBe("http://localhost:11434/v1/models");
+  });
+
+  test("sends the API key as a bearer token when one is set", async () => {
+    let headers = new Headers();
+    mockFetch(async (_url, init) => {
+      headers = new Headers(init?.headers);
+      return Response.json({ data: [{ id: "m" }] });
+    });
+    await listLocalModels("http://127.0.0.1:8888/v1", { apiKey: "  sk-unsloth-abc  " });
+    expect(headers.get("authorization")).toBe("Bearer sk-unsloth-abc");
+  });
+
+  test("sends no Authorization header without a key", async () => {
+    let headers = new Headers({ authorization: "unset" });
+    mockFetch(async (_url, init) => {
+      headers = new Headers(init?.headers);
+      return Response.json({ data: [] });
+    });
+    await listLocalModels("http://localhost:11434/v1", { apiKey: "   " });
+    expect(headers.has("authorization")).toBe(false);
   });
 
   test("explains an unreachable server", async () => {

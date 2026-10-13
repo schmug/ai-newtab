@@ -27,6 +27,7 @@ export default function App() {
   const [provider, setProvider] = useState<ProviderId>(DEFAULT_PROVIDER);
   const [localBaseUrl, setLocalBaseUrl] = useState(DEFAULT_LOCAL_BASE_URL);
   const [localModel, setLocalModel] = useState<string | null>(null);
+  const [localApiKey, setLocalApiKey] = useState<string | null>(null);
   const [autoRebuild, setAutoRebuild] = useState(true);
   const [intervalHours, setIntervalHours] = useState(DEFAULT_REBUILD_INTERVAL_HOURS);
   /** Transpiled homepage, ready for Sandpack. */
@@ -63,6 +64,7 @@ export default function App() {
         setProvider(settings.provider);
         setLocalBaseUrl(settings.localBaseUrl);
         setLocalModel(settings.localModel);
+        setLocalApiKey(settings.localApiKey);
         setAutoRebuild(settings.autoRebuild);
         setIntervalHours(settings.rebuildIntervalHours ?? DEFAULT_REBUILD_INTERVAL_HOURS);
         setResumable(activeSession ?? null);
@@ -107,6 +109,10 @@ export default function App() {
     setLocalModel(next);
     await saveSetting("localModel", next);
   }, []);
+  const changeLocalApiKey = useCallback(async (next: string | null) => {
+    setLocalApiKey(next);
+    await saveSetting("localApiKey", next);
+  }, []);
   const useLocal = useCallback(async () => {
     await changeProvider("local");
     // Nothing to build with until a model is picked, so go straight to Settings.
@@ -134,6 +140,8 @@ export default function App() {
       onChangeLocalBaseUrl={changeLocalBaseUrl}
       localModel={localModel}
       onChangeLocalModel={changeLocalModel}
+      localApiKey={localApiKey}
+      onChangeLocalApiKey={changeLocalApiKey}
       autoRebuild={autoRebuild}
       onToggleAutoRebuild={toggleAutoRebuild}
       intervalHours={intervalHours}
