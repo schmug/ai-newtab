@@ -62,7 +62,15 @@ export async function runHomepageBuild(opts: RunOptions): Promise<HomepageBuildR
   const [agentId, environmentId] = await Promise.all([
     ensureAgent(client, store, opts.model),
     ensureEnvironment(client, store),
-  ]);
+  ]).catch(async (err) => {
+    // This fails before the cleanup `finally` below. A rejected key can never reach
+    // the session, so forget it; otherwise the worker heartbeat resumes it every minute.
+    const status = (err as { status?: number }).status;
+    if (opts.resumeSessionId && (status === 401 || status === 403)) {
+      await store.remove(STORAGE_KEYS.activeSessionId);
+    }
+    throw err;
+  });
   emit.log(`agent=${agentId} environment=${environmentId}`);
 
   let sessionId = opts.resumeSessionId;
